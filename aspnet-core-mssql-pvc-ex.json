@@ -1,0 +1,333 @@
+{
+  "kind": "Template",
+  "apiVersion": "v1",
+  "metadata": {
+    "name": "aspnet-core-mssql-per-ex",
+    "annotations": {
+      "description": "An example ASP.NET Core application with MSSQL database",
+      "iconClass": "icon-aspnet",
+      "tags": "instant-app,aspnet,aspnetcore,.net,mssql"
+    }
+  },
+  "objects": [
+    {
+      "kind": "Service",
+      "apiVersion": "v1",
+      "metadata": {
+        "name": "${NAME}",
+        "annotations": { "description": "Exposes and load balances the application pods" }
+      },
+      "spec": {
+        "ports": [
+          {
+            "name": "web",
+            "port": 5000,
+            "targetPort": 5000
+          }
+        ],
+        "selector": { "name": "${NAME}" }
+      }
+    },
+    {
+      "kind": "Route",
+      "apiVersion": "v1",
+      "metadata": { "name": "${NAME}" },
+      "spec": {
+        "host": "${APPLICATION_HOSTNAME}",
+        "to": {
+          "kind": "Service",
+          "name": "${NAME}"
+        }
+      }
+    },
+    {
+      "kind": "ImageStream",
+      "apiVersion": "v1",
+      "metadata": {
+        "name": "${NAME}",
+        "annotations": { "description": "Keeps track of changes in the application image" }
+      }
+    },
+    {
+      "kind": "BuildConfig",
+      "apiVersion": "v1",
+      "metadata": {
+        "name": "${NAME}",
+        "annotations": { "description": "Defines how to build the application" }
+      },
+      "spec": {
+        "source": {
+          "type": "Git",
+          "git": {
+            "uri": "${SOURCE_REPOSITORY_URL}",
+            "ref": "${SOURCE_REPOSITORY_REF}"
+          },
+          "contextDir": "${CONTEXT_DIR}"
+        },
+        "strategy": {
+          "type": "Source",
+          "sourceStrategy": {
+            "from": {
+              "kind": "DockerImage",
+              "name": "click2cloud/aspnet-core-centos7:latest"
+            },
+            "forcePull": false,
+            "incremental": true
+          }
+        },
+        "output": {
+          "to": {
+            "kind": "ImageStreamTag",
+            "name": "${NAME}:latest"
+          }
+        },
+        "triggers": [
+          { "type": "ConfigChange" },
+          { "type": "ImageChange" },
+          {
+            "type": "GitHub",
+            "github": { "secret": "${GITHUB_WEBHOOK_SECRET}" }
+          },
+          {
+            "type": "Generic",
+            "generic": { "secret": "${GENERIC_WEBHOOK_SECRET}" }
+          }
+        ]
+      }
+    },
+    {
+      "apiVersion": "v1",
+      "kind": "PersistentVolumeClaim",
+      "metadata": {
+        "name": "${DATABASE_SERVICE_NAME}"
+      },
+      "spec": {
+        "accessModes": [
+          "ReadWriteOnce"
+        ],
+        "resources": {
+          "requests": {
+            "storage": "${VOLUME_CAPACITY}"
+          }
+        }
+      }
+    },
+    {
+      "kind": "DeploymentConfig",
+      "apiVersion": "v1",
+      "metadata": {
+        "name": "${NAME}",
+        "annotations": { "description": "Defines how to deploy the application server" }
+      },
+      "spec": {
+        "strategy": { "type": "Rolling" },
+        "triggers": [
+          {
+            "type": "ImageChange",
+            "imageChangeParams": {
+              "automatic": true,
+              "containerNames": [ "${NAME}" ],
+              "from": {
+                "kind": "ImageStreamTag",
+                "name": "${NAME}:latest"
+              }
+            }
+          },
+          { "type": "ConfigChange" }
+        ],
+        "replicas": 1,
+        "selector": { "name": "${NAME}" },
+        "template": {
+          "metadata": {
+            "name": "${NAME}",
+            "labels": { "name": "${NAME}" }
+          },
+          "spec": {
+            "containers": [
+              {
+                "name": "${NAME}",
+                "image": "${NAME}",
+                "ports": [ { "containerPort": 5000 } ],
+                "env": [
+                  {
+                    "name": "DATABASE_SERVICE_NAME",
+                    "value": "${DATABASE_SERVICE_NAME}"
+                  },
+                  {
+                    "name": "SA_PASSWORD",
+                    "value": "${SA_PASSWORD}"
+                  }
+                ],
+                "resources": {
+                  "limits": {
+                    "memory": "${MEMORY_LIMIT}"
+                  }
+                },
+                "volumeMounts": [
+                  {
+                    "mountPath": "/var/opt",
+                    "name": "${DATABASE_SERVICE_NAME}-data"
+                  }
+                ]
+              }
+            ],
+			"dnsPolicy": "ClusterFirst",
+            "restartPolicy": "Always",
+            "volumes": [
+              {
+                "name": "${DATABASE_SERVICE_NAME}-data",
+                "persistentVolumeClaim": {
+                  "claimName": "${DATABASE_SERVICE_NAME}"
+                }
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "kind": "Service",
+      "apiVersion": "v1",
+      "metadata": {
+        "name": "${DATABASE_SERVICE_NAME}",
+        "annotations": { "description": "Exposes the database server" }
+      },
+      "spec": {
+        "ports": [
+          {
+            "name": "mssql",
+            "port": 1433,
+            "targetPort": 1433
+          }
+        ],
+        "selector": { "name": "${DATABASE_SERVICE_NAME}" }
+      }
+    },
+    {
+      "kind": "DeploymentConfig",
+      "apiVersion": "v1",
+      "metadata": {
+        "name": "${DATABASE_SERVICE_NAME}",
+        "annotations": { "description": "Defines how to deploy the database" }
+      },
+      "spec": {
+        "strategy": { "type": "Recreate" },
+        "triggers": [ { "type": "ConfigChange" } ],
+        "replicas": 1,
+        "selector": { "name": "${DATABASE_SERVICE_NAME}" },
+        "template": {
+          "metadata": {
+            "name": "${DATABASE_SERVICE_NAME}",
+            "labels": { "name": "${DATABASE_SERVICE_NAME}" }
+          },
+          "spec": {
+            "containers": [
+              {
+                "name": "mssql",
+                "image": "click2cloud/mssqldb-openshift",
+                "ports": [ { "containerPort": 1433 } ],
+                "env": [
+                  {
+                    "name": "SA_PASSWORD",
+                    "value": "${SA_PASSWORD}"
+                  },
+                  {
+                    "name": "ACCEPT_EULA",
+                    "value": "Y"
+                  }
+                ],
+                "resources": {
+                  "limits": {
+                    "memory": "${MEMORY_MSSQL_LIMIT}"
+                  }
+                }
+              }
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "parameters": [
+    {
+      "name": "NAME",
+      "displayName": "Name",
+      "description": "The name assigned to all of the frontend objects defined in this template.",
+      "value": "aspnet-core-mssql-per-ex",
+      "required": true
+    },
+    {
+      "name": "MEMORY_LIMIT",
+      "displayName": "Memory Limit",
+      "description": "Maximum amount of memory the application container can use.",
+      "value": "512Mi",
+      "required": true
+    },
+    {
+      "name": "MEMORY_MSSQL_LIMIT",
+      "displayName": "Memory Limit (MSSQL)",
+      "description": "Maximum amount of memory the MSSQL container can use.",
+      "value": "512Mi",
+      "required": true
+    },
+    {
+      "name": "SOURCE_REPOSITORY_URL",
+      "displayName": "Git Repository URL",
+      "description": "The URL of the repository with your application source code",
+      "value": "https://github.com/click2cloud/aspcore-mssql-sample.git",
+      "required": true
+    },
+    {
+      "name": "SOURCE_REPOSITORY_REF",
+      "displayName": "Git Reference",
+      "description": "Set this to a branch name, tag or other ref of your repository if you are not using the default branch"
+    },
+    {
+      "name": "CONTEXT_DIR",
+      "displayName": "Context Directory",
+      "description": "Set this to the relative path to your project if it is not in the root of your repository"
+    },
+    {
+      "name": "APPLICATION_HOSTNAME",
+      "displayName": "Application Hostname",
+      "description": "The exposed hostname that will route to the .NET service, if left blank a value will be defaulted."
+    },
+    {
+      "name": "GITHUB_WEBHOOK_SECRET",
+      "displayName": "GitHub Webhook Secret",
+      "description": "A secret string used to configure the GitHub webhook",
+      "generate": "expression",
+      "from": "[a-zA-Z0-9]{40}"
+    },
+    {
+      "name": "GENERIC_WEBHOOK_SECRET",
+      "displayName": "Generic Webhook Secret",
+      "description": "A secret string used to configure the Generic webhook.",
+      "generate": "expression",
+      "from": "[a-zA-Z0-9]{40}"
+    },
+    {
+      "name": "DATABASE_SERVICE_NAME",
+      "displayName": "Database Service Name",
+      "description": "Database Service Name",
+      "value": "mssql",
+      "required": true
+    },
+    {
+      "name": "SA_PASSWORD",
+      "displayName": "Database Password",
+      "description": "Password for the MSSQL user.",
+      "generate": "expression",
+      "from": "[a-zA-Z0-9]{16}",
+      "required": true
+    },
+    {
+      "description": "Volume space available for data, e.g. 512Mi, 2Gi.",
+      "displayName": "Volume Capacity",
+      "name": "VOLUME_CAPACITY",
+      "required": true,
+      "value": "3Gi"
+    }
+  ],
+  "labels": { "template": "aspnet-core-mssql-per-ex" }
+}
